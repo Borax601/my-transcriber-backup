@@ -18,18 +18,31 @@ try:
 except Exception as e:
     print(e)
 
-# --- HTMLテンプレート ---
+# --- HTMLテンプレート (入力欄が追加されたバージョン) ---
 HTML_FORM = """
 <!doctype html>
 <title>音声ファイルをアップロード</title>
 <style>
-  body {{ font-family: sans-serif; margin: 2em; }}
-  .result-box {{ margin-top: 1em; padding: 1em; border: 1px solid #ccc; background-color: #f9f9f9; white-space: pre-wrap; }}
+  body { font-family: sans-serif; margin: 2em; }
+  .form-group { margin-bottom: 1em; }
+  label { display: block; margin-bottom: 0.25em; }
+  input[type='text'] { width: 300px; padding: 0.25em; }
+  .result-box { margin-top: 1em; padding: 1em; border: 1px solid #ccc; background-color: #f9f9f9; white-space: pre-wrap; }
 </style>
 <h1>音声ファイルをアップロードして文字起こし＆要約</h1>
 <form method=post action="/upload" enctype=multipart/form-data>
-  <p>対応ファイル形式: mp3, wav, aiff, m4a など</p>
-  <input type=file name=audio_file>
+  <div class="form-group">
+    <label for="conversation_type">会話の種類 (例: 会議, 診察, 面談)</label>
+    <input type="text" id="conversation_type" name="conversation_type">
+  </div>
+  <div class="form-group">
+    <label for="participants">参加者 (例: 医師と患者, 上司Aと部下B)</label>
+    <input type="text" id="participants" name="participants">
+  </div>
+  <div class="form-group">
+    <p>対応ファイル形式: mp3, wav, aiff, m4a など</p>
+    <input type=file name=audio_file>
+  </div>
   <input type=submit value=実行>
 </form>
 """
@@ -59,62 +72,65 @@ def show_upload_form():
 def handle_upload_and_process():
     if 'audio_file' not in request.files:
         return "エラー: リクエストにファイルパートがありません"
-
     file = request.files['audio_file']
     if file.filename == '':
         return "エラー: ファイルが選択されていません"
-
     if file:
         filename = secure_filename(file.filename)
         os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
         save_path = os.path.join(app.config['UPLOAD_FOLDER'], filename)
         file.save(save_path)
         print(f"ファイル '{filename}' を '{save_path}' に保存しました。")
-
         try:
-            # === STEP 1: 文字起こし処理 ===
-            print("Geminiにファイルをアップロードしています...")
-            gemini_file = genai.upload_file(path=save_path)
+            # 入力フォームから会話の種類・参加者を取得
+            conversation_type = request.form.get("conversation_type", "")
+            participants = request.form.get("participants", "")
 
+            import mimetypes
+            print("Geminiにファイルをアップロードしています...")
+            mime_type, _ = mimetypes.guess_type(save_path)
+            if not mime_type:
+                mime_type = "audio/m4a"  # デフォルト（必要に応じて他形式も対応可）
+            gemini_file = genai.upload_file(path=save_path, mime_type=mime_type)
+            print(f"mime_type: {mime_type}")
             print("Gemini側でのファイル処理を待っています...")
             while gemini_file.state.name == "PROCESSING":
                 time.sleep(2)
                 gemini_file = genai.get_file(name=gemini_file.name)
-
             if gemini_file.state.name == "FAILED":
                 return f"エラー: Geminiへのファイルアップロードに失敗しました。"
-
             print("ファイル準備完了。文字起こしを開始します...")
             model = genai.GenerativeModel(model_name='models/gemini-1.5-flash-latest')
 
+            # --- ここでプロンプトに会話の種類・参加者・話者分離を明示的に指示 ---
+            prompt_transcribe = f"""
+この音声ファイルは『{conversation_type}』の会話で、参加者は『{participants}』です。
+
+もし話者の分離が可能であれば、発言ごとに話者名（例：医師A、患者B、上司A、部下Bなど）を付与して日本語で正確に文字起こししてください。
+話者が特定できない場合はそのまま記載してください。
+
+文字起こし結果は、話者ごとに発言が分かるようにしてください。
+"""
             response_transcribe = model.generate_content(
-                ["この音声ファイルを日本語で文字起こししてください。", gemini_file],
+                [prompt_transcribe, gemini_file],
                 request_options={"timeout": 600}
             )
             transcribed_text = response_transcribe.text
             print("文字起こし完了。")
-
-            # === STEP 2: 要約処理 ===
             print("要約を開始します...")
-            prompt_summarize = f"以下の議事録を、重要なポイントを箇条書きでまとめてください。\n\n---\n\n{transcribed_text}"
+            prompt_summarize = f"この会話は『{conversation_type}』で、参加者は『{participants}』です。\n\n以下の議事録を、重要なポイントを箇条書きでまとめてください。\n\n---\n\n{transcribed_text}"
             response_summarize = model.generate_content(
                 prompt_summarize,
                 request_options={"timeout": 120}
             )
             summary_text = response_summarize.text
             print("要約完了。")
-
             genai.delete_file(name=gemini_file.name)
-
-            # === STEP 3: 結果表示 ===
             return RESULT_HTML.format(
                 transcribed_text=transcribed_text,
                 summary_text=summary_text
             )
-
         except Exception as e:
             print(f"エラーが発生しました: {e}")
             return f"処理中にエラーが発生しました: {e}"
-
     return "予期せぬエラーが発生しました。"
-
