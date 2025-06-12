@@ -103,13 +103,25 @@ def handle_upload_and_process():
             model = genai.GenerativeModel(model_name='models/gemini-1.5-flash-latest')
 
             # --- ここでプロンプトに会話の種類・参加者・話者分離を明示的に指示 ---
+            # 参加者リストを抽出し、話者名候補としてプロンプトで強調
+            participants_list = [p.strip() for p in participants.replace('、', ',').replace('と', ',').split(',') if p.strip()]
+            participants_bullet = '\n'.join(f'- {p}' for p in participants_list)
             prompt_transcribe = f"""
-この音声ファイルは『{conversation_type}』の会話で、参加者は『{participants}』です。
+この音声ファイルは『{conversation_type}』の会話で、参加者は以下の通りです：
+{participants_bullet}
 
-もし話者の分離が可能であれば、発言ごとに話者名（例：医師A、患者B、上司A、部下Bなど）を付与して日本語で正確に文字起こししてください。
-話者が特定できない場合はそのまま記載してください。
+【厳守事項】
+- 発言ごとに必ず話者名（上記の候補から選択、例：{', '.join(participants_list)}）を付与してください。
+- 話者が変わるたびに必ず改行し、話者名：発言内容 の形式で日本語で正確に文字起こししてください。
+- 1人の発言に複数文が含まれる場合も、話者名を省略せず毎回付与してください。
+- 話者が特定できない場合は「不明」などと記載してください。
 
-文字起こし結果は、話者ごとに発言が分かるようにしてください。
+【出力例】
+講師A：こんにちは。今日はよろしくお願いします。
+私B：よろしくお願いします。
+講師A：まず最初に・・・
+
+上記の形式を厳密に守ってください。
 """
             response_transcribe = model.generate_content(
                 [prompt_transcribe, gemini_file],
@@ -117,6 +129,35 @@ def handle_upload_and_process():
             )
             transcribed_text = response_transcribe.text
             print("文字起こし完了。")
+
+            # --- 話者分離の再プロンプト処理 ---
+            import re
+            # 参加者名が十分に含まれているか判定（例：最低2人の話者名が登場しているか）
+            speaker_count = 0
+            for p in participants_list:
+                if re.search(re.escape(p) + r'：', transcribed_text):
+                    speaker_count += 1
+            if speaker_count < max(2, len(participants_list)):
+                print("話者分離が不十分なため、再プロンプトします...")
+                reprompt = f"""
+以下は話者分離が不十分な文字起こし結果です。必ず発言ごとに話者名（{', '.join(participants_list)} など）を付与し、話者が変わるたびに改行してください。
+
+---
+{transcribed_text}
+---
+
+【厳守事項】
+- 発言ごとに必ず話者名を付与してください。
+- 話者名が特定できない場合は「不明」としてください。
+- 例：\n講師A：こんにちは。\n私B：よろしくお願いします。
+"""
+                response_transcribe2 = model.generate_content(
+                    reprompt,
+                    request_options={"timeout": 600}
+                )
+                transcribed_text = response_transcribe2.text
+                print("再話者分離完了。")
+
             print("要約を開始します...")
             prompt_summarize = f"この会話は『{conversation_type}』で、参加者は『{participants}』です。\n\n以下の議事録を、重要なポイントを箇条書きでまとめてください。\n\n---\n\n{transcribed_text}"
             response_summarize = model.generate_content(
