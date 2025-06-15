@@ -167,8 +167,16 @@ def handle_upload_and_process():
             summary_text = response_summarize.text
             print("要約完了。")
             genai.delete_file(name=gemini_file.name)
+
+            # --- 話者交代ごとに改行を挿入する整形処理 ---
+            import re
+            speakers = participants_list + ["医者", "患者", "不明"]
+            pattern = r"(?<!^)" + r"|".join([fr"(?<!\n)({re.escape(s)}：)" for s in speakers])
+            # 既に行頭にある場合は除外し、そうでなければ直前に改行を挿入
+            transcribed_text_fmt = re.sub(pattern, lambda m: "\n" + m.group(0), transcribed_text)
+
             return RESULT_HTML.format(
-                transcribed_text=transcribed_text,
+                transcribed_text=transcribed_text_fmt,
                 summary_text=summary_text
             )
         except Exception as e:
