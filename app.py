@@ -21,30 +21,133 @@ except Exception as e:
 # --- HTMLテンプレート (入力欄が追加されたバージョン) ---
 HTML_FORM = """
 <!doctype html>
-<title>音声ファイルをアップロード</title>
-<style>
-  body { font-family: sans-serif; margin: 2em; }
-  .form-group { margin-bottom: 1em; }
-  label { display: block; margin-bottom: 0.25em; }
-  input[type='text'] { width: 300px; padding: 0.25em; }
-  .result-box { margin-top: 1em; padding: 1em; border: 1px solid #ccc; background-color: #f9f9f9; white-space: pre-wrap; }
-</style>
-<h1>音声ファイルをアップロードして文字起こし＆要約</h1>
-<form method=post action="/upload" enctype=multipart/form-data>
-  <div class="form-group">
-    <label for="conversation_type">会話の種類 (例: 会議, 診察, 面談)</label>
-    <input type="text" id="conversation_type" name="conversation_type">
+<html lang='ja'>
+<head>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>音声ファイルをアップロード</title>
+  <style>
+    body {
+      font-family: 'Segoe UI', 'Hiragino Sans', 'Meiryo', sans-serif;
+      background: #f5f7fa;
+      margin: 0;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+    }
+    .container {
+      background: #fff;
+      border-radius: 24px;
+      box-shadow: 0 2px 16px rgba(0,0,0,0.08);
+      padding: 2em 1em;
+      margin: 3em auto;
+      width: 90vw;
+      max-width: 800px;
+      min-width: 280px;
+      min-height: 300px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      box-sizing: border-box;
+    }
+    @media (max-width: 600px) {
+      .container {
+        width: 98vw;
+        max-width: 100vw;
+        margin: 0.5em auto;
+        padding: 1em 0.2em;
+      }
+    }
+    .form-group {
+      width: 100%;
+      margin-bottom: 1.2em;
+    }
+    label {
+      display: block;
+      margin-bottom: 0.3em;
+      font-weight: 500;
+    }
+    input[type='text'] {
+      width: 100%;
+      padding: 0.6em;
+      border: 1px solid #bfc6d1;
+      border-radius: 7px;
+      font-size: 1em;
+      box-sizing: border-box;
+      margin-bottom: 0.2em;
+    }
+    input[type='file'] {
+      width: 100%;
+      margin-top: 0.3em;
+    }
+    input[type='submit'] {
+      background: #1976d2;
+      color: #fff;
+      border: none;
+      border-radius: 7px;
+      padding: 0.8em 2em;
+      font-size: 1.1em;
+      font-weight: bold;
+      cursor: pointer;
+      margin-top: 0.7em;
+      box-shadow: 0 2px 8px rgba(25, 118, 210, 0.10);
+      transition: background 0.2s;
+    }
+    input[type='submit']:hover {
+      background: #1565c0;
+    }
+    .title {
+      color: #1976d2;
+      font-size: 1.6em;
+      font-weight: bold;
+      text-align: center;
+      margin: 0.5em 0 1.2em 0;
+      letter-spacing: 0.04em;
+    }
+    .top-img {
+      width: 90px;
+      margin-bottom: 0.5em;
+    }
+    @media (max-width: 600px) {
+      .container {
+        padding: 1.2em 0.3em 1.5em 0.3em;
+        max-width: 98vw;
+      }
+      .top-img {
+        width: 65px;
+      }
+      .title {
+        font-size: 1.1em;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div style="width:100%; display: flex; justify-content: center; margin-bottom: 0.5em; margin-top: 0.5em;">
+      <img src="/static/flask_run_port_5001.png" alt="説明画像" style="max-width: 200px; width: 30vw; height: auto; display: block; margin: 0 auto;" loading="lazy">
+    </div>
+    <div class="title" style="text-align:center; margin-bottom: 1em;">
+      <span style="font-size:2rem; font-weight:bold; display:inline-block;">音声ファイルをアップロードして文字起こし＆要約</span>
+    </div>
+    <form method="post" action="/upload" enctype="multipart/form-data" style="width:100%;">
+      <div class="form-group">
+        <label for="conversation_type">会話の種類</label>
+        <input type="text" id="conversation_type" name="conversation_type" placeholder="例：診察">
+      </div>
+      <div class="form-group">
+        <label for="participants">参加者（例：医師と患者、上司Aと部下B）</label>
+        <input type="text" id="participants" name="participants" placeholder="例：医師と患者">
+      </div>
+      <div class="form-group">
+        <span style="font-size:0.98em; color:#555;">対応ファイル形式：mp3, wav, aiff, m4a など</span><br>
+        <input type="file" name="audio_file" accept="audio/*">
+      </div>
+      <input type="submit" value="実行">
+    </form>
   </div>
-  <div class="form-group">
-    <label for="participants">参加者 (例: 医師と患者, 上司Aと部下B)</label>
-    <input type="text" id="participants" name="participants">
-  </div>
-  <div class="form-group">
-    <p>対応ファイル形式: mp3, wav, aiff, m4a など</p>
-    <input type=file name=audio_file>
-  </div>
-  <input type=submit value=実行>
-</form>
+</body>
+</html>
 """
 
 RESULT_HTML = """
@@ -52,12 +155,12 @@ RESULT_HTML = """
 <title>処理結果</title>
 <style>
   body {{ font-family: sans-serif; margin: 2em; }}
-  .result-box {{ margin-top: 1em; padding: 1em; border: 1px solid #ccc; background-color: #f9f9f9; white-space: pre-wrap; }}
+  .result-box {{ margin-top: 1em; padding: 1em; border: 1px solid #ccc; background-color: #f9f9f9; white-space: pre-wrap; border-radius: 16px; box-shadow: 0 2px 8px rgba(0,0,0,0.04); }}
 </style>
-<h1>処理結果</h1>
-<h2>文字起こし全文</h2>
+<h1 style="color: #2386e6; font-size:2.1rem; font-weight:bold;">処理結果</h1>
+<h2 style="color: #2386e6; font-size:1.4rem; font-weight:bold;">文字起こし全文</h2>
 <div class="result-box">{transcribed_text}</div>
-<h2>要約</h2>
+<h2 style="color: #2386e6; font-size:1.4rem; font-weight:bold;">要約</h2>
 <div class="result-box">{summary_text}</div>
 <br>
 <a href="/">別のファイルを試す</a>
