@@ -189,49 +189,69 @@ def handle_upload_and_process():
             conversation_type = request.form.get("conversation_type", "")
             participants = request.form.get("participants", "")
 
-            import mimetypes
-            print("Geminiにファイルをアップロードしています...")
-            mime_type, _ = mimetypes.guess_type(save_path)
-            if not mime_type:
-                mime_type = "audio/m4a"  # デフォルト（必要に応じて他形式も対応可）
-            gemini_file = genai.upload_file(path=save_path, mime_type=mime_type)
-            print(f"mime_type: {mime_type}")
-            print("Gemini側でのファイル処理を待っています...")
-            while gemini_file.state.name == "PROCESSING":
-                time.sleep(2)
-                gemini_file = genai.get_file(name=gemini_file.name)
-            if gemini_file.state.name == "FAILED":
-                return f"エラー: Geminiへのファイルアップロードに失敗しました。"
-            print("ファイル準備完了。文字起こしを開始します...")
+            # --- Resemblyzer + クラスタリングによる話者分離 ---
+            from resemblyzer import preprocess_wav, VoiceEncoder
+            import numpy as np
+            import librosa
+            from pydub import AudioSegment
+            from sklearn.cluster import DBSCAN
+
+            # 音声読み込み
+            wav, sr = librosa.load(save_path, sr=None)
+            wav = preprocess_wav(wav, source_sr=sr)
+            encoder = VoiceEncoder()
+            # フレームごとに埋め込み特徴量を抽出
+            _, cont_embeds, wav_splits = encoder.embed_utterance(wav, return_partials=True, rate=16)
+            # DBSCANクラスタリングで話者分離
+            clustering = DBSCAN(eps=0.6, min_samples=10).fit(cont_embeds)
+            labels = clustering.labels_
+            num_speakers = len(set(labels)) - (1 if -1 in labels else 0)
+            print(f"推定話者数: {num_speakers}")
+
+            # 音声を話者ごとに区間分割
+            speaker_segments = {}
+            for idx, label in enumerate(labels):
+                if label == -1:
+                    continue  # ノイズ等は除外
+                start = int(wav_splits[idx][0] * sr)
+                end = int(wav_splits[idx][1] * sr)
+                if label not in speaker_segments:
+                    speaker_segments[label] = []
+                speaker_segments[label].append((start, end))
+
+            # 音声ファイルをpydubで再読込（分割用）
+            audio = AudioSegment.from_file(save_path)
+
+            # Gemini APIで各話者ごとに文字起こし
+            import tempfile
             model = genai.GenerativeModel(model_name='models/gemini-1.5-flash-latest')
+            transcribed_blocks = []
+            for i, (label, segments) in enumerate(speaker_segments.items()):
+                # 各話者の発話区間をまとめて1ファイルに
+                speaker_audio = AudioSegment.empty()
+                for start, end in segments:
+                    speaker_audio += audio[start * 1000 // sr : end * 1000 // sr]
+                # 一時ファイルに保存
+                with tempfile.NamedTemporaryFile(suffix='.wav', delete=False) as tmpf:
+                    speaker_audio.export(tmpf.name, format='wav')
+                    mime_type = 'audio/wav'
+                    gemini_file = genai.upload_file(path=tmpf.name, mime_type=mime_type)
+                    while gemini_file.state.name == "PROCESSING":
+                        time.sleep(2)
+                        gemini_file = genai.get_file(name=gemini_file.name)
+                    if gemini_file.state.name == "FAILED":
+                        transcribed_blocks.append((f"話者{i+1}", "（Gemini APIエラー）"))
+                        continue
+                    prompt = f"この音声は話者{i+1}の発話です。発言内容を日本語で正確に文字起こししてください。"  # シンプルなプロンプト
+                    response = model.generate_content([
+                        prompt, gemini_file
+                    ], request_options={"timeout": 600})
+                    transcribed_blocks.append((f"話者{i+1}", response.text))
+                    genai.delete_file(name=gemini_file.name)
 
-            # --- ここでプロンプトに会話の種類・参加者・話者分離を明示的に指示 ---
-            # 参加者リストを抽出し、話者名候補としてプロンプトで強調
-            participants_list = [p.strip() for p in participants.replace('、', ',').replace('と', ',').split(',') if p.strip()]
-            participants_bullet = '\n'.join(f'- {p}' for p in participants_list)
-            prompt_transcribe = f"""
-この音声ファイルは『{conversation_type}』の会話で、参加者は以下の通りです：
-{participants_bullet}
-
-【厳守事項】
-- 発言ごとに必ず話者名（上記の候補から選択、例：{', '.join(participants_list)}）を付与してください。
-- 話者が変わるたびに必ず改行し、話者名：発言内容 の形式で日本語で正確に文字起こししてください。
-- 1人の発言に複数文が含まれる場合も、話者名を省略せず毎回付与してください。
-- 話者が特定できない場合は「不明」などと記載してください。
-
-【出力例】
-講師A：こんにちは。今日はよろしくお願いします。
-私B：よろしくお願いします。
-講師A：まず最初に・・・
-
-上記の形式を厳密に守ってください。
-"""
-            response_transcribe = model.generate_content(
-                [prompt_transcribe, gemini_file],
-                request_options={"timeout": 600}
-            )
-            transcribed_text = response_transcribe.text
-            print("文字起こし完了。")
+            # まとめて一貫した形式に整形
+            transcribed_text = "\n".join([f"{spk}：{txt}" for spk, txt in transcribed_blocks])
+            print("Resemblyzer話者分離＋Gemini文字起こし完了。")
 
             # --- 話者分離の再プロンプト処理 ---
             import re
